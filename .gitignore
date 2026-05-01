@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# Virtual environment
+venv/
+.venv/
+
+# Models and data (large files)
+models/
+printed_dataset/
+printed_dataset_v2/
+printed_dataset_v3/
+
+# Output images
+output/*.png
+debug_*.png
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Kaggle cache
+.cache/
