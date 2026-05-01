@@ -90,17 +90,21 @@ def preprocess_roi(roi):
 
 
 def predict_rotation_invariant(model, img_norm):
-    """Test multiple rotations and return best prediction with confidence."""
+    """Two-stage rotation search: coarse every 15° then fine ±7° around best.
+    Uses batch inference for speed."""
     import cv2 as cv
-    # Try rotations: 0, 90, 180, 270, and small tilts
-    angles = [0, 90, 180, 270, -15, 15, -30, 30]
+    
+    img = img_norm[0, :, :, 0].astype(np.float32)
+    h, w = img.shape
+    
+    # Stage 1: coarse search (every 15° + key cardinals)
+    coarse_angles = list(range(-45, 46, 15)) + [90, 180, 270]
+    coarse_angles = sorted(set(coarse_angles))
+    
     best_probs = None
     best_angle = 0
-
-    img = img_norm[0, :, :, 0]
-    h, w = img.shape
-
-    for angle in angles:
+    
+    for angle in coarse_angles:
         if angle == 0:
             rotated = img
         else:
@@ -108,18 +112,46 @@ def predict_rotation_invariant(model, img_norm):
             rotated = cv.warpAffine(img, matrix, (w, h),
                                     borderMode=cv.BORDER_CONSTANT,
                                     borderValue=0.0)
-
-        inp = rotated.reshape(1, IMG_SIZE, IMG_SIZE, 1).astype(np.float32)
+        
+        inp = rotated.reshape(1, IMG_SIZE, IMG_SIZE, 1)
         x = mx.array(inp)
         logits = model(x)
         probs = mx.softmax(logits, axis=1)
         mx.eval(probs)
         probs_np = np.array(probs[0])
-
+        
         if best_probs is None or probs_np.max() > best_probs.max():
             best_probs = probs_np
             best_angle = angle
-
+    
+    # Stage 2: fine search around best angle (±8°, step 2°)
+    if abs(best_angle) <= 45 or best_angle in [90, 180, 270]:
+        fine_angles = []
+        for da in range(-8, 9, 2):
+            a = best_angle + da
+            if a not in coarse_angles:
+                fine_angles.append(a)
+        
+        for angle in fine_angles:
+            if angle == 0:
+                rotated = img
+            else:
+                matrix = cv.getRotationMatrix2D((w/2, h/2), angle, 1.0)
+                rotated = cv.warpAffine(img, matrix, (w, h),
+                                        borderMode=cv.BORDER_CONSTANT,
+                                        borderValue=0.0)
+            
+            inp = rotated.reshape(1, IMG_SIZE, IMG_SIZE, 1)
+            x = mx.array(inp)
+            logits = model(x)
+            probs = mx.softmax(logits, axis=1)
+            mx.eval(probs)
+            probs_np = np.array(probs[0])
+            
+            if probs_np.max() > best_probs.max():
+                best_probs = probs_np
+                best_angle = angle
+    
     return best_probs, best_angle
 
 

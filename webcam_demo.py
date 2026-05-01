@@ -194,13 +194,58 @@ def auto_detect_characters(frame_bgr, min_area=500, max_area=50000):
 
 
 # ─── PREDICTION ────────────────────────────────────────────────────────
-def predict(model, img_norm):
-    """Run inference on preprocessed image."""
-    x = mx.array(img_norm)
-    logits = model(x)
-    probs = mx.softmax(logits, axis=1)
-    mx.eval(probs)
-    return np.array(probs[0])
+def predict(model, img_norm, rotation_invariant=True):
+    """Run inference on preprocessed image. Optionally tests multiple rotations."""
+    if not rotation_invariant:
+        x = mx.array(img_norm)
+        logits = model(x)
+        probs = mx.softmax(logits, axis=1)
+        mx.eval(probs)
+        return np.array(probs[0]), 0
+    
+    # Rotation-invariant: test multiple angles, pick best
+    img = img_norm[0, :, :, 0]
+    h, w = img.shape
+    
+    # Stage 1: coarse every 15°
+    coarse = list(range(-45, 46, 15)) + [90, 180, 270]
+    coarse = sorted(set(coarse))
+    best_probs, best_angle = None, 0
+    
+    for angle in coarse:
+        if angle == 0:
+            rot = img
+        else:
+            m = cv2.getRotationMatrix2D((w/2, h/2), angle, 1.0)
+            rot = cv2.warpAffine(img, m, (w, h), borderMode=cv2.BORDER_CONSTANT, borderValue=0.0)
+        inp = rot.reshape(1, IMG_SIZE, IMG_SIZE, 1)
+        x = mx.array(inp)
+        logits = model(x)
+        probs = mx.softmax(logits, axis=1)
+        mx.eval(probs)
+        p = np.array(probs[0])
+        if best_probs is None or p.max() > best_probs.max():
+            best_probs, best_angle = p, angle
+    
+    # Stage 2: fine ±8° around best
+    for da in range(-8, 9, 2):
+        angle = best_angle + da
+        if angle in coarse: continue
+        if angle == 0:
+            rot = img
+        else:
+            m = cv2.getRotationMatrix2D((w/2, h/2), angle, 1.0)
+            rot = cv2.warpAffine(img, m, (w, h), borderMode=cv2.BORDER_CONSTANT, borderValue=0.0)
+        inp = rot.reshape(1, IMG_SIZE, IMG_SIZE, 1)
+        x = mx.array(inp)
+        logits = model(x)
+        probs = mx.softmax(logits, axis=1)
+        mx.eval(probs)
+        p = np.array(probs[0])
+        if p.max() > best_probs.max():
+            best_probs, best_angle = p, angle
+    
+    return best_probs, best_angle
 
 
 # ─── VISUALIZATION ─────────────────────────────────────────────────────
@@ -374,7 +419,7 @@ def main():
                 result = preprocess_roi(roi)
                 if result is not None and time.time() - last_pred_time > pred_interval:
                     img_norm, binary = result
-                    probs = predict(model, img_norm)
+                    probs, angle = predict(model, img_norm)
                     last_pred_time = time.time()
 
                     # Draw predictions
@@ -401,7 +446,7 @@ def main():
                     result = preprocess_roi(roi)
                     if result is not None:
                         img_norm, _ = result
-                        probs = predict(model, img_norm)
+                        probs, _angle = predict(model, img_norm)
                         probs_list.append(probs)
                         valid_boxes.append((x, y, w, h))
                 last_pred_time = time.time()
@@ -452,7 +497,7 @@ def main():
                     result = preprocess_roi(roi)
                     if result is not None:
                         img_norm, _ = result
-                        frozen_probs = predict(model, img_norm)
+                        frozen_probs, _ = predict(model, img_norm)
                 print("Frame frozen. Press F to unfreeze.")
             else:
                 frozen = False
